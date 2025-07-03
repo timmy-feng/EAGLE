@@ -493,16 +493,26 @@ class Model(nn.Module):
             import json
             import os
             try:
-                with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
-                    index_json = json.loads(f.read())
-                    emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
-                with safe_open(os.path.join(path, emb_path),
-                               framework="pt",
-                               device="cpu") as f:
-                    tensor_slice = f.get_slice("model.embed_tokens.weight")
-                    vocab_size, hidden_dim = tensor_slice.get_shape()
-                    tensor = tensor_slice[:, :hidden_dim].float()
+                # Try single safetensors file first
+                safetensors_path = os.path.join(path, "model.safetensors")
+                if os.path.exists(safetensors_path):
+                    with safe_open(safetensors_path, framework="pt", device="cpu") as f:
+                        tensor_slice = f.get_slice("model.embed_tokens.weight")
+                        vocab_size, hidden_dim = tensor_slice.get_shape()
+                        tensor = tensor_slice[:, :hidden_dim].float()
+                else:
+                    # Try with index file for split safetensors
+                    with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
+                        index_json = json.loads(f.read())
+                        emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
+                    with safe_open(os.path.join(path, emb_path),
+                                   framework="pt",
+                                   device="cpu") as f:
+                        tensor_slice = f.get_slice("model.embed_tokens.weight")
+                        vocab_size, hidden_dim = tensor_slice.get_shape()
+                        tensor = tensor_slice[:, :hidden_dim].float()
             except:
+                # Fallback to PyTorch bin files
                 with open(os.path.join(path, "pytorch_model.bin.index.json"), "r") as f:
                     index_json = json.loads(f.read())
                     emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
@@ -521,7 +531,6 @@ class Model(nn.Module):
             tokenizer = AutoTokenizer.from_pretrained(tokenizerpath)
             dataset = load_dataset('json', data_files=datapath)
             dataset = dataset['train']
-            # dataset = dataset.select(range(96))
             original_columns1 = dataset.column_names
             num_proc = 48
 
@@ -566,6 +575,7 @@ class Model(nn.Module):
                         conversation,
                         return_tensors="pt",
                         max_length=2048,
+                        truncation=True,
                         add_special_tokens=False,
                     ).input_ids[0]
                     loss_mask = torch.ones_like(input_ids)
@@ -640,6 +650,10 @@ class Model(nn.Module):
             # 合并结果
             token_dict = merge_dicts(results)
 
+            # ensure that we have N tokens in top N
+            for i in range(self.vocab_size):
+                if i not in token_dict:
+                    token_dict[i] = 0
 
             total_frequency = sum(token_dict.values())
             top_N = token_dict.most_common(N)

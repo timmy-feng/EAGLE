@@ -1,5 +1,19 @@
 import argparse
 import deepspeed
+import json
+import re
+from transformers import AutoTokenizer
+import os
+import torch
+
+from cnets import Model
+from configs import EConfig
+from datasets import load_dataset
+from typing import Any, Dict, List
+
+from torch import nn
+from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description='sp')
 parser.add_argument('--basepath', type=str, default='/home/lyh/weights/hf/llama31chat/8B/')
@@ -8,11 +22,10 @@ parser.add_argument('--trainpath', type=str,
 parser.add_argument('--testpath', type=str,
                     default="/home/lyh/code/nlp/developing/vllmbase/vllm/gedata/0318.json")
 parser.add_argument('--savedir', type=str, default='0')
+parser.add_argument('--configpath', type=str, default='config.json')
 parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
 parser = deepspeed.add_config_arguments(parser)
 args = parser.parse_args()
-import json
-import re
 
 deepspeed_config = args.deepspeed_config
 with open(deepspeed_config) as f:
@@ -22,33 +35,10 @@ train_config = {
     "num_epochs": 40,
     "num_workers": 2,
     "max_len": 2048,
-    "config_path": "config.json",
+    "config_path": args.configpath,
 }
 
-from safetensors import safe_open
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
-import torch
-from cnets import padding
-
 torch.backends.cuda.matmul.allow_tf32 = True
-from accelerate.utils import set_seed
-
-set_seed(0)
-from cnets import Model
-from configs import EConfig
-from datasets import load_dataset
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
-
-from torch import nn, optim
-from torch.utils.data import Dataset, DataLoader, DistributedSampler
-from tqdm import tqdm
-# import accelerate
-import numpy as np
-from transformers import PreTrainedTokenizerBase, get_linear_schedule_with_warmup
-
 
 
 def build_dataset_rank(
@@ -103,6 +93,7 @@ def build_dataset_rank(
                 return_tensors="pt",
                 max_length=2048,
                 add_special_tokens=False,
+                truncation=True,
             ).input_ids[0]
             loss_mask = torch.ones_like(input_ids)
             # print(i)
@@ -223,8 +214,7 @@ world_size = deepspeed.comm.get_world_size()
 if global_rank == 0:
     import wandb
 
-    wandb.login(key="")
-    wandb.init(project="l382", entity="yuhui-li", config=ds_config)
+    wandb.init(project="eagle-training", config=ds_config)
 
 os.makedirs(args.savedir, exist_ok=True)
 
